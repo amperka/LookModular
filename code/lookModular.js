@@ -7,22 +7,22 @@ var midiMapping = function(midiValue, outMin, outMax) {
   return outMin + midiValue * (outMax - outMin) / midiMaxValue;
 };
 
-var MidiKeyboardLogic = function() {
+var NoteQueue = function() {
   this._pressedKeys = [];
 };
 
-MidiKeyboardLogic.prototype.noteOn = function(note) {
+NoteQueue.prototype.push = function(note) {
   this._pressedKeys.push(note);
 };
 
-MidiKeyboardLogic.prototype.noteOff = function(note) {
+NoteQueue.prototype.delete = function(note) {
   var notePosition;
   while ((notePosition = this._pressedKeys.indexOf(note)) !== -1) {
     this._pressedKeys.splice(notePosition, 1);
   }
 };
 
-MidiKeyboardLogic.prototype.lastNote = function() {
+NoteQueue.prototype.lastNote = function() {
   var keysCount = this._pressedKeys.length;
   return (keysCount) ? this._pressedKeys[keysCount - 1] : null;
 };
@@ -151,7 +151,7 @@ var cdDrive = new CdDrive({
   maxSpeedV: 1.6665
 });
 
-var keyboard = new MidiKeyboardLogic();
+var keyboard = new NoteQueue();
 
 var midiChannel = 0;
 var fadeCC = 1;
@@ -162,7 +162,7 @@ midi.on('noteOn', function(i) {
   if (i.chan === midiChannel) {
     ampEnvelope.run(i.velocity);
     if (i.velocity !== 0) {
-      keyboard.noteOn(i.note);
+      keyboard.push(i.note);
       cdDrive.frequency(midiNotesFrequency[keyboard.lastNote()]);
     }
   }
@@ -176,7 +176,7 @@ midi.on('ctrlChange', function(i) {
 
 midi.on('noteOff', function(i) {
   if (i.chan === midiChannel) {
-    keyboard.noteOff(i.note);
+    keyboard.delete(i.note);
     var lastNote = keyboard.lastNote();
     if (lastNote) {
       cdDrive.frequency(midiNotesFrequency[lastNote]);
