@@ -2,25 +2,20 @@ var envelopeServo = require('@amperka/servo').connect(P13);
 var midi = require('Midi').setup(PrimarySerial, 31250);
 var pid = require('@amperka/pid').create({kp: 0.2});
 
-var maxNote = function(note, maxNote) {
-  if (note > maxNote) {
-    note = note - 12 * Math.ceil((note - maxNote)/12);
-  }
-  return note;
+var midiMapping = function(midiValue, outMin, outMax) {
+  var midiMaxValue = 127;
+  return outMin + midiValue * (outMax - outMin) / midiMaxValue;
 };
 
-var MidiKeyboardLogic = function(opts) {
-  this._maxNote = opts.maxNote;
+var MidiKeyboardLogic = function() {
   this._pressedKeys = [];
 };
 
 MidiKeyboardLogic.prototype.noteOn = function(note) {
-  note = maxNote(note, this._maxNote);
   this._pressedKeys.push(note);
 };
 
 MidiKeyboardLogic.prototype.noteOff = function(note) {
-  note = maxNote(note, this._maxNote);
   var notePosition;
   while ((notePosition = this._pressedKeys.indexOf(note)) !== -1) {
     this._pressedKeys.splice(notePosition, 1);
@@ -45,32 +40,30 @@ var CdDrive = function(opts) {
   this._minSpeed = opts.minSpeedV / vRef;
   this._maxSpeed = opts.maxSpeedV / vRef;
   this._coilSwitchPeriod = 0;
-  this._revolutionPerSwitch = 1 / (18 * 2); // 18 переключений, 
+  this._revolutionPerSwitch = 1 / (18 * 2); // 18 переключений,
   this._pid.setup({
     target: 0,
     outputMin: this._minSpeed,
     outputMax: this._maxSpeed
   });
-  
-  
 
-this._inc = E.asm("int()",
-"adr    r1, data",
-"ldr    r0, [r1]",
-"add    r0, #1",
-"str    r0, [r1]",
-"bx lr",
-"nop",
-"data:",
-".word    0x0"
-);
-  
+  this._inc = E.asm('int()',
+    'adr    r1, data',
+    'ldr    r0, [r1]',
+    'add    r0, #1',
+    'str    r0, [r1]',
+    'bx lr',
+    'nop',
+    'data:',
+    '.word    0x0'
+  );
+
   this._lastTime = 0;
   this._pulseCount = 0;
   this._frequency = 0;
 
   var self = this;
-  setWatch(this._inc, self._oscPin, { irq: true });
+  setWatch(this._inc, self._oscPin, {irq: true});
 
   this._pid.run(function() {
     var time = getTime() - self._lastTime;
@@ -136,11 +129,6 @@ AmpEnvelope.prototype.fade = function(control) {
   this._fading = midiMapping(control, this._fadeMin, this._fadeMax);
 };
 
-var midiMapping = function(midiValue, out_min, out_max) {
-  var midiMaxValue = 127;
-  return out_min + midiValue * (out_max - out_min) / midiMaxValue;
-};
-
 var midiNotesFrequency = new Float32Array(127);
 for (var i = 0; i < midiNotesFrequency.length; i++) {
   var a4Freq = 440;
@@ -162,7 +150,7 @@ var cdDrive = new CdDrive({
   maxSpeedV: 1.6665
 });
 
-var keyboard = new MidiKeyboardLogic({maxNote: 90});
+var keyboard = new MidiKeyboardLogic();
 
 var midiChannel = 0;
 var fadeCC = 1;
