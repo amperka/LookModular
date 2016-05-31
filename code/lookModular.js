@@ -28,10 +28,9 @@ MidiKeyboardLogic.prototype.lastNote = function() {
 };
 
 var CdDrive = function(opts) {
-  var vRef = 0, c = 0, avgCount = 8;
-  while (c < avgCount) {
+  var vRef = 0, avgCount = 8;
+  for (var c = 0; c < avgCount; c++) {
     vRef += E.getAnalogVRef();
-    c++;
   }
   vRef /= avgCount;
   this._pid = opts.pid;
@@ -39,15 +38,18 @@ var CdDrive = function(opts) {
   this._speedPin = opts.speedPin;
   this._minSpeed = opts.minSpeedV / vRef;
   this._maxSpeed = opts.maxSpeedV / vRef;
+  this._pidUpdatePeriod = opts.updatePeriod || 0.005;
   this._coilSwitchPeriod = 0;
-  this._revolutionPerSwitch = 1 / (18 * 2); // 18 переключений,
+  var coilSwitchesPerRevolution = 18;
+  var irqPerSwitch = 2;
+  this._revolutionPerPulses = 1 / (coilSwitchesPerRevolution * irqPerSwitch);
   this._pid.setup({
     target: 0,
     outputMin: this._minSpeed,
     outputMax: this._maxSpeed
   });
 
-  this._inc = E.asm('int()',
+  this._increment = E.asm('int()',
     'adr    r1, data',
     'ldr    r0, [r1]',
     'add    r0, #1',
@@ -58,27 +60,26 @@ var CdDrive = function(opts) {
     '.word    0x0'
   );
 
-  this._lastTime = 0;
-  this._pulseCount = 0;
+  this._lastPidUpdateTime = 0;
+  this._interruptCount = 0;
   this._frequency = 0;
 
   var self = this;
-  setWatch(this._inc, self._oscPin, {irq: true});
+  setWatch(this._increment, self._oscPin, {irq: true});
 
   this._pid.run(function() {
-    var time = getTime() - self._lastTime;
-    self._lastTime = getTime();
-    var pulseCount = self._inc();
-    var pulse = pulseCount - self._pulseCount - 1;
-    self._pulseCount = pulseCount;
-    if (pulse > 0) {
-      var revolutions = pulse * self._revolutionPerSwitch;
+    var time = getTime() - self._lastPidUpdateTime;
+    self._lastPidUpdateTime = getTime();
+    var interruptCount = self._increment() - 1;
+    var pulses = interruptCount - self._interruptCount;
+    self._interruptCount = interruptCount;
+    if (pulses > 0) {
+      var revolutions = pulses * self._revolutionPerPulses;
       this._frequency = revolutions / time;
     }
-
     var output = self._pid.update(this._frequency);
     analogWrite(self._speedPin, output);
-  }, 0.005);
+  }, this._pidUpdatePeriod);
 };
 
 CdDrive.prototype.frequency = function(freq) {
@@ -131,9 +132,9 @@ AmpEnvelope.prototype.fade = function(control) {
 
 var midiNotesFrequency = new Float32Array(127);
 for (var i = 0; i < midiNotesFrequency.length; i++) {
-  var a4Freq = 440;
-  var a4MidiNum = 69;
-  midiNotesFrequency[i] = Math.pow(2, (i - a4MidiNum) / 12) * a4Freq;
+  var a1Freq = 440;
+  var a1MidiNum = 69;
+  midiNotesFrequency[i] = Math.pow(2, (i - a1MidiNum) / 12) * a1Freq;
 }
 
 var ampEnvelope = new AmpEnvelope({
