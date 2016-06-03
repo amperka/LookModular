@@ -46,8 +46,8 @@ var CdDrive = function(opts) {
   this._minSpeed = opts.minSpeedV / vRef;
   this._maxSpeed = opts.maxSpeedV / vRef;
   this._pid = opts.pid;
-  // Рассчитываем управляющее воздействие PID-регулятора каждые 5 мс
-  this._pidUpdatePeriod = opts.updatePeriod || 0.005;
+  // Рассчитываем управляющее воздействие PID-регулятора каждые 9 мс
+  this._pidUpdatePeriod = opts.updatePeriod || 0.009;
   this._coilSwitchPeriod = 0;
   // Обмотки двигателя переключаются 18 раз за оборот
   var coilSwitchesPerRevolution = 18;
@@ -123,9 +123,9 @@ var AmpEnvelope = function(opts) {
   this._maxAmp = opts.maxAmpDeg;
   // Шаг изменения значения ADSR-огибающей - 50 мс
   this._envelopeUpdateTime = opts.envelopeUpdateTime || 0.025;
-  this._attack = opts.attack || 0.01;
+  this._attack = opts.attack || 0.05;
   this._hold = opts.hold || 0.1;
-  this._decay = opts.decay || 0.1;
+  this._decay = opts.decay || 1;
   var sustain = opts.sustain || 0.1;
   this._sustain = this._minAmp + (this._maxAmp - this._minAmp) * sustain;
   this._release = opts.release || 0.05;
@@ -148,14 +148,13 @@ var AmpEnvelope = function(opts) {
 };
 AmpEnvelope.prototype.stop = function() {
   if (this._attackDecayAnim) {
-    this._attackDecayAnim.stop();
+    this._attackDecayAnim.stop(false);
     this._attackDecayAnim = undefined;
   }
   if (this._releaseAnim) {
-    this._releaseAnim.stop();
+    this._releaseAnim.stop(false);
     this._attackDecayAnim = undefined;
   }
-  this._servo.write(this._currentAmp);
 };
 AmpEnvelope.prototype.noteOn = function(velocity) {
   this.stop();
@@ -166,9 +165,11 @@ AmpEnvelope.prototype.noteOn = function(velocity) {
     duration: this._attack,
     updateInterval: this._envelopeUpdateTime
   }).queue({
+    from: velocity,
     to: velocity,
     duration: this._hold
   }).queue({
+    from: velocity,
     to: this._sustain,
     duration: this._decay
   });
@@ -211,8 +212,8 @@ for (var i = 0; i < midiNotesFrequency.length; i++) {
 
 var ampEnvelope = new AmpEnvelope({
   servo: envelopeServo,
-  minAmpDeg: 45,
-  maxAmpDeg: 79
+  minAmpDeg: 44,
+  maxAmpDeg: 74
 });
 
 var cdDrive = new CdDrive({
