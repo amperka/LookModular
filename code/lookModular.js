@@ -5,6 +5,8 @@ var envelopeServo = require('@amperka/servo').connect(P13);
 var midi = require('Midi').setup(PrimarySerial, 31250);
 // PID-регулятор для управления частотой вращения двигателя
 var pid = require('@amperka/pid').create({kp: 0.2});
+// Класс для создания плавных переходов
+var Animation = require('@amperka/animation');
 // Функция для перевода MIDI-сообщений в реальные величины - вольты, градусы...
 var midiMapping = function(midiValue, outMin, outMax) {
   var midiMaxValue = 127;
@@ -50,7 +52,7 @@ var CdDrive = function(opts) {
   // Обмотки двигателя переключаются 18 раз за оборот
   var coilSwitchesPerRevolution = 18;
   // При каждом переключении драйвер двигателя генерирует импульс.
-  // Этот импульс вызовет у нас 2 прерывания - по переднему и заднему фронту
+  // Этот импульс вызовет у 2 прерывания - по переднему и заднему фронту
   var irqPerSwitch = 2;
   this._revolutionPerPulses = 1 / (coilSwitchesPerRevolution * irqPerSwitch);
   this._pid.setup({
@@ -119,53 +121,85 @@ var AmpEnvelope = function(opts) {
   this._minAmp = opts.minAmpDeg;
   // Угол сервопривода, при котором громкость максимальна
   this._maxAmp = opts.maxAmpDeg;
-  // Шаг изменения значения ADSR-огибающей - 25 мс
-  // Из всего ADSR я буду использовать только hold и decay
-  this._decayUpdateTime = opts.decayUpdateTime || 25;
-  // Время, в течении которого звук ноты максимальный.
-  // За это время серва должна успеть повернуться до громкости ноты.
-  this._holdTime = opts.holdTime || 100;
-  // Коэффициенты для расчёта следующего уровня громкости
-  // во время decay-периода.
-  this._decayMinK = 0.9;
-  this._decayMaxK = 1;
-  // При старте затухания не будет.
-  // Потом можем поменять через control change MIDI-клавиатуры
-  this._currentDecayK = this._decayMaxK;
-  // Sustain level круто было бы задавать с MIDI-клавиатуры,
-  // но моя такого не позволяет. Хардкод:
-  this._sustainLevel = this._minAmp + (this._maxAmp - this._minAmp) * 0.1;
-  this._velocity = null;
-  this._decayIntervalID = null;
-  this._holdTimeoutID = null;
+  // Шаг изменения значения ADSR-огибающей - 50 мс
+  this._envelopeUpdateTime = opts.envelopeUpdateTime || 0.025;
+  this._attack = opts.attack || 0.01;
+  this._hold = opts.hold || 0.1;
+  this._decay = opts.decay || 0.1;
+  var sustain = opts.sustain || 0.1;
+  this._sustain = this._minAmp + (this._maxAmp - this._minAmp) * sustain;
+  this._release = opts.release || 0.05;
+  this._attackDecayAnim = undefined;
+  this._releaseAnim = undefined;
+  this._minPeriodLength = 0;
+  this._maxPeriodLength = 5;
+  this._currentAmp = this._minAmp;
+  this._update = function(amp) {
+    this._currentAmp = amp;
+    this._servo.write(this._currentAmp);
+  };
+  this._controlToLength = function(control){
+    return midiMapping(
+      control,
+      this._minPeriodLength,
+      this._maxPeriodLength
+    );
+  };
 };
 AmpEnvelope.prototype.stop = function() {
-  if (this._holdTimeoutID) {
-    clearTimeout(this._holdTimeoutID);
-    this._holdTimeoutID = null;
+  if (this._attackDecayAnim) {
+    this._attackDecayAnim.stop();
+    this._attackDecayAnim = undefined;
   }
-  if (this._decayIntervalID) {
-    clearInterval(this._decayIntervalID);
-    this._decayIntervalID = null;
+  if (this._releaseAnim) {
+    this._releaseAnim.stop();
+    this._attackDecayAnim = undefined;
   }
+  this._servo.write(this._currentAmp);
 };
-AmpEnvelope.prototype.run = function(velocity) {
-  this._velocity = midiMapping(velocity, this._minAmp, this._maxAmp);
+AmpEnvelope.prototype.noteOn = function(velocity) {
   this.stop();
-  this._servo.write(this._velocity);
+  velocity = midiMapping(velocity, this._minAmp, this._maxAmp);
+  this._attackDecayAnim = Animation.create({
+    from: this._currentAmp,
+    to: velocity,
+    duration: this._attack,
+    updateInterval: this._envelopeUpdateTime
+  }).queue({
+    to: velocity,
+    duration: this._hold
+  }).queue({
+    to: this._sustain,
+    duration: this._decay
+  });
   var self = this;
-  this._holdTimeoutID = setTimeout(function(){
-    self._decayIntervalID = setInterval(function(){
-      var newVolumePart = self._sustainLevel * (1 - self._currentDecayK);
-      var oldVolumePart = self._velocity * self._currentDecayK;
-      self._velocity = newVolumePart + oldVolumePart;
-      self._servo.write(self._velocity);
-    }, self._decayUpdateTime);
-    self._holdTimeoutID = null;
-  }, this._holdTime);
+  this._attackDecayAnim.on('update', function(val) {
+    self._update(val);
+  });
+  this._attackDecayAnim.play();
+};
+AmpEnvelope.prototype.noteOff = function() {
+  this.stop();
+  this._releaseAnim = Animation.create({
+    from: this._currentAmp,
+    to: this._minAmp,
+    duration: this._release,
+    updateInterval: this._envelopeUpdateTime
+  });
+  var self = this;
+  this._releaseAnim.on('update', function(val) {
+    self._update(val);
+  });
+  this._releaseAnim.play();
+};
+AmpEnvelope.prototype.attack = function(control) {
+  this._attack = this._controlToLength(control);
 };
 AmpEnvelope.prototype.decay = function(control) {
-  this._currentDecayK = midiMapping(control, this._decayMinK, this._decayMaxK);
+  this._decay = this._controlToLength(control);
+};
+AmpEnvelope.prototype.release = function(control) {
+  this._release = this._controlToLength(control);
 };
 
 var midiNotesFrequency = new Float32Array(127);
@@ -194,11 +228,11 @@ var keyboard = new NoteQueue();
 var midiChannel = 0;
 var decayCC = 1;
 
-ampEnvelope.run(0);
+ampEnvelope.noteOff();
 
 midi.on('noteOn', function(i) {
   if (i.chan === midiChannel) {
-    ampEnvelope.run(i.velocity);
+    ampEnvelope.noteOn(i.velocity);
     if (i.velocity !== 0) {
       keyboard.push(i.note);
       cdDrive.frequency(midiNotesFrequency[keyboard.lastNote()]);
@@ -219,7 +253,7 @@ midi.on('noteOff', function(i) {
     if (lastNote) {
       cdDrive.frequency(midiNotesFrequency[lastNote]);
     } else {
-      ampEnvelope.run(0);
+      ampEnvelope.noteOff();
     }
   }
 });
